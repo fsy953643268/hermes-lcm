@@ -158,6 +158,8 @@ def test_plugin_entrypoint_registers_declared_lcm_tools():
     registered = []
 
     class _Ctx:
+        context_engine_tool_handlers_receive_messages = True
+
         def __init__(self):
             self.engine = None
 
@@ -188,6 +190,38 @@ def test_plugin_entrypoint_registers_declared_lcm_tools():
         assert callable(entry["handler"])
 
 
+def test_plugin_entrypoint_skips_registered_lcm_tools_without_message_forwarding():
+    module = _load_plugin_entrypoint_module("hermes_lcm_packaging_tool_registration_unsafe_host")
+    registered = {}
+
+    class _HermesAgentLikeCtx:
+        def __init__(self):
+            self.engine = None
+
+        def register_context_engine(self, engine):
+            self.engine = engine
+
+        def register_tool(self, name, toolset, schema, handler, description="", emoji=""):
+            registered[name] = {
+                "handler": handler,
+                "toolset": toolset,
+            }
+
+        def registry_dispatch(self, name, args):
+            return registered[name]["handler"](
+                args,
+                task_id="task-1",
+                user_task="find current turn",
+            )
+
+    ctx = _HermesAgentLikeCtx()
+    module.register(ctx)
+
+    assert ctx.engine is not None
+    assert registered == {}
+    assert EXPECTED_LCM_TOOLS.issubset({schema["name"] for schema in ctx.engine.get_tool_schemas()})
+
+
 def test_register_gracefully_degrades_when_host_lacks_register_tool():
     module = _load_plugin_entrypoint_module("hermes_lcm_packaging_no_register_tool")
 
@@ -209,6 +243,8 @@ def test_register_gracefully_degrades_when_register_tool_hook_raises():
     module = _load_plugin_entrypoint_module("hermes_lcm_packaging_register_tool_raises")
 
     class _CtxRaisesTool:
+        context_engine_tool_handlers_receive_messages = True
+
         def __init__(self):
             self.engine = None
             self.register_tool_calls = []
@@ -233,6 +269,8 @@ def test_registered_tool_handlers_route_through_engine_handle_tool_call(monkeypa
     registered = {}
 
     class _Ctx:
+        context_engine_tool_handlers_receive_messages = True
+
         def __init__(self):
             self.engine = None
 
@@ -241,6 +279,14 @@ def test_registered_tool_handlers_route_through_engine_handle_tool_call(monkeypa
 
         def register_tool(self, name, toolset, schema, handler, description="", emoji=""):
             registered[name] = handler
+
+        def registry_dispatch(self, name, args, messages):
+            return registered[name](
+                args,
+                task_id="task-1",
+                user_task="find current turn",
+                messages=messages,
+            )
 
     ctx = _Ctx()
     module.register(ctx)
@@ -256,9 +302,9 @@ def test_registered_tool_handlers_route_through_engine_handle_tool_call(monkeypa
     monkeypatch.setattr(ctx.engine, "handle_tool_call", spy_handle_tool_call)
     messages = [{"role": "user", "content": "find current turn"}]
 
-    for tool_name, handler in registered.items():
+    for tool_name in registered:
         args = {"query": "current turn"}
-        assert handler(args, messages=messages) == f"handled:{tool_name}"
+        assert ctx.registry_dispatch(tool_name, args, messages) == f"handled:{tool_name}"
 
     assert {name for name, _, _ in calls} == EXPECTED_LCM_TOOLS
     for name, args, kwargs in calls:

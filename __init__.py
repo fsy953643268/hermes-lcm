@@ -26,6 +26,27 @@ def _make_wrapped_handler(tool_name: str, engine):
     return _wrapped
 
 
+def _host_forwards_registered_tool_messages(ctx) -> bool:
+    """Return whether ctx.register_tool handlers receive active messages.
+
+    Hermes Agent's current registry dispatch passes task_id/user_task to
+    plugin tools, but not the active conversation messages list. Registering
+    duplicate lcm_* tool names on that host makes the model call the registry
+    handler instead of the native context-engine dispatch branch, so LCM loses
+    current-turn ingest before lcm_grep/lcm_expand style recovery.
+
+    Keep plugin-side tool registration opt-in until a host explicitly
+    advertises that registered context-engine handlers receive messages.
+    """
+    capability = getattr(ctx, "context_engine_tool_handlers_receive_messages", False)
+    if callable(capability):
+        try:
+            capability = capability()
+        except Exception:
+            return False
+    return bool(capability)
+
+
 def register(ctx):
     """Plugin entry point — register the LCM context engine and tools."""
     from .config import LCMConfig
@@ -56,11 +77,11 @@ def register(ctx):
     # Register as the context engine (replaces ContextCompressor)
     ctx.register_context_engine(engine)
 
-    # Register tools via the plugin registry so they are discoverable by
-    # hosts that support plugin-provided tool registration. Keep the
-    # context-engine toolset and dispatch path so platform_toolsets gating,
-    # schema deduplication, and live messages=... ingestion remain equivalent
-    # to Hermes Agent's native context-engine handling.
+    # Register tools via the plugin registry only on hosts that preserve the
+    # active messages=... contract for registered context-engine tools. Current
+    # Hermes Agent handles lcm_* correctly through the native context-engine
+    # schema/dispatch path; registering duplicate names there would shadow that
+    # path and lose current-turn ingest.
     _TOOLS = {
         "lcm_grep": LCM_GREP,
         "lcm_load_session": LCM_LOAD_SESSION,
@@ -71,7 +92,7 @@ def register(ctx):
         "lcm_doctor": LCM_DOCTOR,
     }
     register_tool = getattr(ctx, "register_tool", None)
-    if callable(register_tool):
+    if callable(register_tool) and _host_forwards_registered_tool_messages(ctx):
         for name, schema in _TOOLS.items():
             try:
                 register_tool(
@@ -88,6 +109,12 @@ def register(ctx):
                     name,
                     exc,
                 )
+    elif callable(register_tool):
+        logger.info(
+            "LCM plugin tool registration skipped because this Hermes host "
+            "does not advertise messages forwarding for registered "
+            "context-engine tools; continuing with context-engine schemas"
+        )
     else:
         logger.info(
             "LCM tool registration unavailable on this Hermes host; "
