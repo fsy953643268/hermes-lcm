@@ -82,18 +82,18 @@ def register(ctx):
     # Hermes Agent handles lcm_* correctly through the native context-engine
     # schema/dispatch path; registering duplicate names there would shadow that
     # path and lose current-turn ingest.
-    _TOOLS = {
-        "lcm_grep": LCM_GREP,
-        "lcm_load_session": LCM_LOAD_SESSION,
-        "lcm_describe": LCM_DESCRIBE,
-        "lcm_expand": LCM_EXPAND,
-        "lcm_expand_query": LCM_EXPAND_QUERY,
-        "lcm_status": LCM_STATUS,
-        "lcm_doctor": LCM_DOCTOR,
-    }
+    _TOOLS = [
+        ("lcm_grep", LCM_GREP, "🔍"),
+        ("lcm_load_session", LCM_LOAD_SESSION, "📋"),
+        ("lcm_describe", LCM_DESCRIBE, "📊"),
+        ("lcm_expand", LCM_EXPAND, "🔎"),
+        ("lcm_expand_query", LCM_EXPAND_QUERY, "❓"),
+        ("lcm_status", LCM_STATUS, "💚"),
+        ("lcm_doctor", LCM_DOCTOR, "🏥"),
+    ]
     register_tool = getattr(ctx, "register_tool", None)
     if callable(register_tool) and _host_forwards_registered_tool_messages(ctx):
-        for name, schema in _TOOLS.items():
+        for name, schema, emoji in _TOOLS:
             try:
                 register_tool(
                     name=name,
@@ -101,6 +101,7 @@ def register(ctx):
                     schema=schema,
                     handler=_make_wrapped_handler(name, engine),
                     description=schema.get("description", ""),
+                    emoji=emoji,
                 )
             except Exception as exc:
                 logger.warning(
